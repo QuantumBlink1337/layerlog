@@ -7,7 +7,7 @@ Paths like ``/archives`` are HTTP endpoints. We never read the archive's
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -26,8 +26,11 @@ class ArchiveNotFound(BambuddyError):
 
 
 def _dt(value: Any) -> datetime | None:
-    """Bambuddy times are naive ISO strings; the timezone is unconfirmed, so keep them naive."""
-    return datetime.fromisoformat(value) if value else None
+    """Bambuddy times are naive ISO strings in UTC (confirmed against a real archive)."""
+    if not value:
+        return None
+    dt = datetime.fromisoformat(value)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 @dataclass

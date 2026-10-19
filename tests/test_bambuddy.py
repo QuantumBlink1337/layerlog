@@ -1,6 +1,7 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -18,9 +19,21 @@ def test_archive_from_saved_record():
     assert a.display_name == "Assembly_PLA_5h34m.gcode.3mf"
     assert a.model_key == "Assembly_PLA"
     assert not a.is_mini
-    assert a.started_at == datetime(2026, 10, 18, 14, 33, 5) and a.started_at.tzinfo is None
+    assert a.started_at == datetime(2026, 10, 18, 14, 33, 5, tzinfo=timezone.utc)
     assert a.duration_hours is None  # still printing
     assert a.est_hours == pytest.approx(20039 / 3600)
+
+
+def test_completed_archive_from_real_record():
+    a = Archive.from_json(json.loads((FIXTURES / "archive_1_completed.json").read_text()))
+    assert a.status == "completed" and a.failure_reason is None
+    assert a.model_key == "Assembly_PLA"
+    assert a.started_at == datetime(2026, 10, 18, 19, 33, 28, 810912, tzinfo=timezone.utc)
+    # 14:33 CT == 19:33 UTC: the naive timestamps are UTC.
+    assert a.started_at.astimezone(ZoneInfo("America/Chicago")).hour == 14
+    assert a.duration_hours == pytest.approx(20733 / 3600)
+    # The wall-clock gap agrees with actual_time_seconds.
+    assert (a.completed_at - a.started_at).total_seconds() == pytest.approx(a.actual_time_seconds, abs=1)
 
 
 def test_archive_falls_back_to_filename_and_tolerates_missing_fields():
