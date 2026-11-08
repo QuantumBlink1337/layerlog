@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from layerlog import threemf
+from layerlog.logger import threemf
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

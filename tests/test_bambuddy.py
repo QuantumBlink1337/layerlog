@@ -6,8 +6,9 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from layerlog import threemf
-from layerlog.bambuddy import Archive, ArchiveNotFound, BambuddyClient, BambuddyError
+from layerlog.logger import threemf
+from layerlog.bambuddy import (Archive, ArchiveNotFound, BambuddyClient, BambuddyError, PrinterNotFound,
+                               PrinterStatus)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ARCHIVE = json.loads((FIXTURES / "archive_1_printing.json").read_text())
@@ -105,3 +106,33 @@ def test_connection_failure_is_wrapped():
     with make_client(handler) as c:
         with pytest.raises(BambuddyError):
             c.get_archive(1)
+
+
+STATUS = json.loads((FIXTURES / "printer_1_status_printing.json").read_text())
+
+
+def test_printer_status_from_real_poll():
+    s = PrinterStatus.from_json(STATUS)
+    assert s.connected and s.state == "RUNNING" and s.stage == "Printing"
+    assert s.archive_id == 27 and s.plate_id == 3
+    assert (s.layer, s.total_layers) == (553, 1415)
+    assert (s.nozzle_temp, s.nozzle_target, s.bed_temp, s.bed_target) == (220.0, 220.0, 65.0, 65.0)
+    assert (s.fan_part, s.fan_aux, s.fan_chamber) == (100, 47, 47)
+    assert [e.full_code for e in s.hms_errors] == ["0501040000030002"]
+
+
+def test_printer_status_tolerates_idle_printer():
+    s = PrinterStatus.from_json({"id": 1, "connected": False, "state": "IDLE"})
+    assert s.archive_id is None and s.layer is None and s.nozzle_temp is None and s.hms_errors == []
+
+
+def test_printer_status_hits_endpoint_and_404_is_printer_not_found():
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == "/api/v1/printers/1/status"
+        return httpx.Response(200, json=STATUS)
+
+    with make_client(handler) as c:
+        assert c.printer_status(1).layer == 553
+    with make_client(lambda r: httpx.Response(404)) as c:
+        with pytest.raises(PrinterNotFound):
+            c.printer_status(9)

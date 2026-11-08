@@ -4,6 +4,11 @@ Logs Bambu P2S prints to Notion with slicer settings, driven by Bambuddy webhook
 See the handoff doc for the full design. Current state: 3MF parser, Bambuddy client,
 and a webhook **capture** endpoint (saves raw payloads so we can see their real shape).
 
+Layout:
+- `layerlog.bambuddy`, `layerlog.names`: shared Bambuddy client (archives, printer status) and name helpers
+- `layerlog.logger`: webhook receiver and 3MF parser, feeding the Notion log
+- surveillance (planned, see `plans/timestamp.md`): status poller, recorder, failure point
+
 ## Capture Bambuddy's webhook payloads (on nucleus)
 
 ```bash

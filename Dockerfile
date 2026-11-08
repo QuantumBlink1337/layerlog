@@ -6,4 +6,4 @@ RUN pip install --no-cache-dir .
 ENV CAPTURE_DIR=/data/captures
 VOLUME /data
 EXPOSE 8000
-CMD ["uvicorn", "layerlog.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "layerlog.logger.app:app", "--host", "0.0.0.0", "--port", "8000"]

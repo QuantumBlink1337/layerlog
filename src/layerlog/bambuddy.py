@@ -1,7 +1,8 @@
-"""Thin client for Bambuddy's REST API (archives only).
+"""Thin client for Bambuddy's REST API (archives and live printer status).
 
-Paths like ``/archives`` are HTTP endpoints. We never read the archive's
-``file_path``; the 3MF always comes through ``/archives/{id}/download``.
+Shared by the logger and surveillance components. Paths like ``/archives``
+are HTTP endpoints. We never read the archive's ``file_path``; the 3MF always
+comes through ``/archives/{id}/download``.
 """
 
 from __future__ import annotations
@@ -21,7 +22,15 @@ class BambuddyError(RuntimeError):
         self.status = status
 
 
-class ArchiveNotFound(BambuddyError):
+class NotFound(BambuddyError):
+    pass
+
+
+class ArchiveNotFound(NotFound):
+    pass
+
+
+class PrinterNotFound(NotFound):
     pass
 
 
@@ -92,6 +101,70 @@ class Archive:
         return None if s is None else s / 3600
 
 
+@dataclass
+class HmsError:
+    full_code: str
+    severity: int | None
+    description: str | None
+    job_id: str | None
+
+
+@dataclass
+class PrinterStatus:
+    """One poll of ``/printers/{id}/status``, reduced to what we log."""
+
+    id: int
+    connected: bool
+    state: str  # e.g. "RUNNING"
+    stage: str | None  # stg_cur_name, e.g. "Printing"
+    current_print: str | None
+    archive_id: int | None  # current_archive_id: links a poll to its Archive
+    plate_id: int | None
+    progress: float | None  # percent
+    remaining_s: float | None
+    layer: int | None
+    total_layers: int | None
+    nozzle_temp: float | None
+    nozzle_target: float | None
+    bed_temp: float | None
+    bed_target: float | None
+    chamber_temp: float | None
+    fan_part: int | None  # cooling_fan_speed, percent
+    fan_aux: int | None  # big_fan1_speed, Bambu's aux fan
+    fan_chamber: int | None  # big_fan2_speed, Bambu's chamber fan
+    hms_errors: list[HmsError]
+    raw: dict[str, Any] = field(repr=False, default_factory=dict)
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> PrinterStatus:
+        t = d.get("temperatures") or {}
+        return cls(
+            id=d["id"],
+            connected=bool(d.get("connected")),
+            state=d.get("state") or "",
+            stage=d.get("stg_cur_name"),
+            current_print=d.get("current_print"),
+            archive_id=d.get("current_archive_id"),
+            plate_id=d.get("current_plate_id"),
+            progress=d.get("progress"),
+            remaining_s=d.get("remaining_time"),
+            layer=d.get("layer_num"),
+            total_layers=d.get("total_layers"),
+            nozzle_temp=t.get("nozzle"),
+            nozzle_target=t.get("nozzle_target"),
+            bed_temp=t.get("bed"),
+            bed_target=t.get("bed_target"),
+            chamber_temp=t.get("chamber"),
+            fan_part=d.get("cooling_fan_speed"),
+            fan_aux=d.get("big_fan1_speed"),
+            fan_chamber=d.get("big_fan2_speed"),
+            hms_errors=[HmsError(full_code=e.get("full_code") or "", severity=e.get("severity"),
+                                 description=e.get("description"), job_id=e.get("job_id"))
+                        for e in d.get("hms_errors") or []],
+            raw=d,
+        )
+
+
 class BambuddyClient:
     def __init__(self, base_url: str, api_key: str, *, timeout: float = 60.0,
                  transport: httpx.BaseTransport | None = None):
@@ -111,13 +184,14 @@ class BambuddyClient:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def _request(self, method: str, path: str, **kw: Any) -> httpx.Response:
+    def _request(self, method: str, path: str, *, not_found: type[NotFound] = ArchiveNotFound,
+                 **kw: Any) -> httpx.Response:
         try:
             resp = self._http.request(method, path, **kw)
         except httpx.HTTPError as e:
             raise BambuddyError(f"{method} {path} failed: {e}") from e
         if resp.status_code == 404:
-            raise ArchiveNotFound(f"{path} not found", 404)
+            raise not_found(f"{path} not found", 404)
         if resp.is_error:
             raise BambuddyError(f"{method} {path} -> HTTP {resp.status_code}", resp.status_code)
         return resp
@@ -139,3 +213,7 @@ class BambuddyClient:
     def download_archive(self, archive_id: int) -> bytes:
         """The archived 3MF (can be tens of MB)."""
         return self._request("GET", f"/archives/{archive_id}/download").content
+
+    def printer_status(self, printer_id: int) -> PrinterStatus:
+        resp = self._request("GET", f"/printers/{printer_id}/status", not_found=PrinterNotFound)
+        return PrinterStatus.from_json(resp.json())
