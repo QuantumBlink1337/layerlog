@@ -4,4 +4,6 @@ __pycache__/
 .env
 *.sqlite3
 .pytest_cache/
-captures/
+telemetry/
+recordings/
+renders/

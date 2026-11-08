@@ -1,29 +1,48 @@
 # layerlog
 
-Logs Bambu P2S prints to Notion with slicer settings, driven by Bambuddy webhooks.
-See the handoff doc for the full design. Current state: 3MF parser, Bambuddy client,
-and a webhook **capture** endpoint (saves raw payloads so we can see their real shape).
+Logs Bambu P2S prints to Notion with slicer settings, and keeps a telemetry timeline
+per print so a failure can be traced to its layer and moment. Everything is pulled from
+Bambuddy's API; nothing needs to reach layerlog.
 
 Layout:
 - `layerlog.bambuddy`, `layerlog.names`: shared Bambuddy client (archives, printer status) and name helpers
-- `layerlog.logger`: webhook receiver and 3MF parser, feeding the Notion log
-- surveillance (planned, see `plans/timestamp.md`): status poller, recorder, failure point
+- `layerlog.logger`: 3MF parser; will check for finished archives and write them to Notion
+- `layerlog.surveillance`: status poller writing `archive_<id>.jsonl` timelines, a camera
+  recorder, and a renderer that burns the telemetry into the video; failure point planned
+  (see `plans/timestamp.md`)
 
-## Capture Bambuddy's webhook payloads (on nucleus)
+## Record prints
+
+Needs `ffmpeg` on the PATH (without it, only telemetry is kept).
+
+```bash
+BAMBUDDY_URL=http://192.168.0.39:8000 .venv/bin/python -m layerlog.surveillance
+```
+
+Or on nucleus:
 
 ```bash
 docker build -t layerlog .
-docker run -d --name layerlog -p 8099:8000 -v /mnt/user/appdata/layerlog:/data \
-  -e WEBHOOK_SECRET=pick-a-long-random-string layerlog
+docker run -d --name layerlog-surveillance -v /mnt/user/appdata/layerlog:/data \
+  -e BAMBUDDY_URL=http://192.168.0.39:8000 -e TZ=America/Chicago layerlog
 ```
 
-Point Bambuddy's webhook at `http://<nucleus-ip>:8099/hooks/bambuddy`, using the same
-secret in its custom header if it supports one. Start or cancel a print; each request is
-saved to `/mnt/user/appdata/layerlog/captures/*.json` (secret values are redacted, and
-the file records which header carried the secret).
+While a print runs, the camera stream is copied (no re-encode, about 3.7 GB/hour at the
+P2S's 1080p ~10 fps) into `RECORDINGS_DIR/archive_<id>/` as hourly segments, and each poll
+is appended to `TELEMETRY_DIR/archive_<id>.jsonl`. Set `BAMBUDDY_API_KEY` if Bambuddy auth
+is on, `POLL_SECONDS` (default 2) to change the rate, and `RECORD=0` to skip video.
+
+## Render a print with its overlay
+
+```bash
+.venv/bin/python -m layerlog.surveillance.render 27   # -> renders/archive_27.mp4
+```
+
+Burns in the local clock (`TZ`) and the layer, progress, temperature and fan readings,
+re-encoded to H.264 (about 0.5 GB/hour).
 
 ## Develop
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -e '.[dev]' && .venv/bin/pytest
+uv venv && uv pip install -e '.[dev]' && .venv/bin/pytest
 ```

@@ -121,7 +121,7 @@ class PrinterStatus:
     archive_id: int | None  # current_archive_id: links a poll to its Archive
     plate_id: int | None
     progress: float | None  # percent
-    remaining_s: float | None
+    remaining_min: float | None  # remaining_time is minutes (Bambu mc_remaining_time)
     layer: int | None
     total_layers: int | None
     nozzle_temp: float | None
@@ -147,7 +147,7 @@ class PrinterStatus:
             archive_id=d.get("current_archive_id"),
             plate_id=d.get("current_plate_id"),
             progress=d.get("progress"),
-            remaining_s=d.get("remaining_time"),
+            remaining_min=d.get("remaining_time"),
             layer=d.get("layer_num"),
             total_layers=d.get("total_layers"),
             nozzle_temp=t.get("nozzle"),
@@ -166,11 +166,11 @@ class PrinterStatus:
 
 
 class BambuddyClient:
-    def __init__(self, base_url: str, api_key: str, *, timeout: float = 60.0,
+    def __init__(self, base_url: str, api_key: str | None = None, *, timeout: float = 60.0,
                  transport: httpx.BaseTransport | None = None):
         self._http = httpx.Client(
             base_url=base_url.rstrip("/") + "/api/v1",
-            headers={"X-API-Key": api_key},
+            headers={"X-API-Key": api_key} if api_key else {},  # omitted when Bambuddy auth is off
             timeout=timeout,
             transport=transport,
         )
@@ -213,6 +213,10 @@ class BambuddyClient:
     def download_archive(self, archive_id: int) -> bytes:
         """The archived 3MF (can be tens of MB)."""
         return self._request("GET", f"/archives/{archive_id}/download").content
+
+    def camera_stream_url(self, printer_id: int) -> str:
+        """MJPEG stream URL for an external reader such as ffmpeg (needs a stream token once auth is on)."""
+        return str(self._http.base_url.join(f"printers/{printer_id}/camera/stream"))
 
     def printer_status(self, printer_id: int) -> PrinterStatus:
         resp = self._request("GET", f"/printers/{printer_id}/status", not_found=PrinterNotFound)

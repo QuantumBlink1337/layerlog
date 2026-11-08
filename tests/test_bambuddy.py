@@ -116,6 +116,7 @@ def test_printer_status_from_real_poll():
     assert s.connected and s.state == "RUNNING" and s.stage == "Printing"
     assert s.archive_id == 27 and s.plate_id == 3
     assert (s.layer, s.total_layers) == (553, 1415)
+    assert s.remaining_min == 1103  # minutes: ~18 h left at layer 553 of 1415
     assert (s.nozzle_temp, s.nozzle_target, s.bed_temp, s.bed_target) == (220.0, 220.0, 65.0, 65.0)
     assert (s.fan_part, s.fan_aux, s.fan_chamber) == (100, 47, 47)
     assert [e.full_code for e in s.hms_errors] == ["0501040000030002"]
