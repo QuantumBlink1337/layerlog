@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -64,8 +65,11 @@ def _n(value: Any, fmt: str = "{:.0f}") -> str:
 def overlay_text(rec: dict[str, Any]) -> str:
     left = rec.get("remaining_min")
     eta = "-" if left is None else f"{int(left) // 60}h{int(left) % 60:02d}m left"
+    state, stage = rec.get("state") or "", rec.get("stage") or ""
+    # The stage name can stay "Printing" through a pause, so any other state is shown too.
+    label = stage or state if state in ("RUNNING", "") else f"{state} ({stage})" if stage else state
     line1 = (f"L {_n(rec.get('layer'))}/{_n(rec.get('total_layers'))}   {_n(rec.get('progress'))}%   "
-             f"{eta}   {rec.get('stage') or rec.get('state') or ''}")
+             f"{eta}   {label}")
     line2 = (f"Nozzle {_n(rec.get('nozzle_temp'))}/{_n(rec.get('nozzle_target'))}   "
              f"Bed {_n(rec.get('bed_temp'))}/{_n(rec.get('bed_target'))}   "
              f"Chamber {_n(rec.get('chamber_temp'))}   "
@@ -99,6 +103,10 @@ def build_ass(all_cues: list[Cue], t0: float, t1: float) -> str:
     return ASS_HEADER + "\n".join(lines) + "\n"
 
 
+class EmptySegment(ValueError):
+    pass
+
+
 def segment_span(path: Path) -> tuple[float, float]:
     """Unix time of the segment's first frame, and of its end."""
     out = subprocess.run(
@@ -106,10 +114,16 @@ def segment_span(path: Path) -> tuple[float, float]:
          "-show_entries", "packet=pts_time:format=duration", "-of", "json", str(path)],
         check=True, capture_output=True, text=True).stdout
     d = json.loads(out)
+    if not d.get("packets"):
+        raise EmptySegment(f"{path.name} has no frames yet")
     t0 = float(d["packets"][0]["pts_time"])
     duration = float(d.get("format", {}).get("duration") or 0)
     # A segment still being written may report no duration; let it cover everything after t0.
-    return t0, t0 + duration if duration > 0 else float("inf")
+    if duration <= 0:
+        return t0, float("inf")
+    # With -copyts, ffmpeg 8's Matroska "duration" is the absolute end time, not a length.
+    # A real length is hours, never near Unix time, so either form is unambiguous.
+    return t0, duration if duration > t0 else t0 + duration
 
 
 def _clock_filter(t0: float) -> str:
@@ -117,8 +131,13 @@ def _clock_filter(t0: float) -> str:
             ":x=20:y=20:fontsize=34:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=8")
 
 
+def _tmp_path(path: Path) -> Path:
+    return path.with_name(f".{path.stem}.tmp{path.suffix}")
+
+
 def render_segment(segment: Path, all_cues: list[Cue], out: Path, *, crf: int = 28) -> None:
     t0, t1 = segment_span(segment)
+    tmp_out = _tmp_path(out)
     with tempfile.TemporaryDirectory() as tmp:
         # ffmpeg runs in tmp so the ass filter sees a bare file name (no filtergraph escaping).
         (Path(tmp) / "overlay.ass").write_text(build_ass(all_cues, t0, t1), encoding="utf-8")
@@ -126,13 +145,26 @@ def render_segment(segment: Path, all_cues: list[Cue], out: Path, *, crf: int = 
             ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", str(segment.resolve()),
              "-vf", f"ass=overlay.ass,{_clock_filter(t0)}",
              "-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf), "-pix_fmt", "yuv420p", "-an",
-             str(out.resolve())],
+             "-f", "mp4", str(tmp_out.resolve())],
             check=True, cwd=tmp)
+    tmp_out.replace(out)  # a player holding the old file keeps it intact
 
 
-def render(archive_id: int, telemetry_dir: Path, recordings_dir: Path, out_dir: Path) -> Path:
-    all_cues = cues(load_timeline(telemetry_dir / f"archive_{archive_id}.jsonl"))
-    segments = sorted((recordings_dir / f"archive_{archive_id}").glob("*.mkv"))
+def part_is_current(segment: Path, part: Path) -> bool:
+    """A part rendered after its segment stopped growing (plus the last poll's hold) is final."""
+    return part.exists() and part.stat().st_mtime > segment.stat().st_mtime + MAX_HOLD_S
+
+
+def render(archive_id: int, telemetry_dir: Path, recordings_dir: Path, out_dir: Path, *,
+           final: bool = False) -> Path:
+    """Render (or refresh) ``out_dir/archive_<id>.mp4``; finished segments are reused.
+
+    ``final`` is for a print that has ended: once the video is written, the raw
+    recording and the per-segment parts are deleted.
+    """
+    timeline_path = telemetry_dir / f"archive_{archive_id}.jsonl"
+    raw_dir = recordings_dir / f"archive_{archive_id}"
+    segments = sorted(raw_dir.glob("*.mkv"))
     if not segments:
         raise FileNotFoundError(f"no recordings for archive {archive_id}")
     parts_dir = out_dir / f"archive_{archive_id}_parts"
@@ -140,15 +172,29 @@ def render(archive_id: int, telemetry_dir: Path, recordings_dir: Path, out_dir: 
     parts = []
     for seg in segments:
         part = parts_dir / f"{seg.stem}.mp4"
-        log.info("rendering %s", seg.name)
-        render_segment(seg, all_cues, part)
+        if not part_is_current(seg, part):
+            log.info("rendering %s", seg.name)
+            try:
+                # Re-read per segment: the live one needs every poll up to the moment it's rendered.
+                render_segment(seg, cues(load_timeline(timeline_path)), part)
+            except EmptySegment as e:
+                log.info("skipping %s", e)
+                continue
         parts.append(part)
-    final = out_dir / f"archive_{archive_id}.mp4"
+    if not parts:
+        raise EmptySegment(f"no frames recorded for archive {archive_id} yet")
+    video = out_dir / f"archive_{archive_id}.mp4"
+    tmp_video = _tmp_path(video)
     listing = parts_dir / "concat.txt"
     listing.write_text("".join(f"file '{p.resolve()}'\n" for p in parts))
     subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-f", "concat",
-                    "-safe", "0", "-i", str(listing), "-c", "copy", str(final)], check=True)
-    return final
+                    "-safe", "0", "-i", str(listing), "-c", "copy", "-f", "mp4", str(tmp_video)], check=True)
+    tmp_video.replace(video)
+    if final and video.stat().st_size > 0:
+        shutil.rmtree(raw_dir)
+        shutil.rmtree(parts_dir)
+        log.info("deleted raw recording %s", raw_dir)
+    return video
 
 
 def main() -> None:

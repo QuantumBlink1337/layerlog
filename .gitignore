@@ -7,3 +7,4 @@ __pycache__/
 telemetry/
 recordings/
 renders/
+surveillance.log

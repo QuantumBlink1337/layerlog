@@ -1,0 +1,32 @@
+# docker compose up -d --build        (from the repo root on nucleus)
+#
+# Storage: telemetry on the cache (appdata); raw recordings and renders on the
+# array. Create the folders first, owned by nobody:users like other Unraid data:
+#   mkdir -p /mnt/user/appdata/layerlog /mnt/user/layerlog/recordings /mnt/user/layerlog/renders
+#   chown -R 99:100 /mnt/user/appdata/layerlog /mnt/user/layerlog
+# Set the "layerlog" share's primary storage to Array (no cache), or raw footage
+# lands on the cache first.
+services:
+  surveillance:
+    build: .
+    image: layerlog
+    container_name: layerlog-surveillance
+    restart: unless-stopped
+    user: "99:100"
+    environment:
+      BAMBUDDY_URL: http://192.168.0.39:8000
+      TZ: America/Chicago
+      PRINTER_ID: "1"
+      # BAMBUDDY_API_KEY: ""        # only if Bambuddy auth is turned on
+      # RENDER_EVERY_SECONDS: "3600"
+    volumes:
+      - /mnt/user/appdata/layerlog:/data
+      - /mnt/user/layerlog/recordings:/recordings
+      - /mnt/user/layerlog/renders:/renders
+    # Stop sends SIGTERM, then ffmpeg gets SIGINT to finalize the open segment.
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

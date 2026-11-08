@@ -74,3 +74,74 @@ def test_none_stops_with_sigint_and_new_archive_switches(tmp_path):
 def test_camera_stream_url():
     with BambuddyClient("http://192.168.0.39:8000/") as c:
         assert c.camera_stream_url(1) == "http://192.168.0.39:8000/api/v1/printers/1/camera/stream"
+
+
+# --- real ffmpeg: the exact recorder command against a fake Bambuddy camera stream ---
+
+import shutil
+import subprocess
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
+
+from layerlog.surveillance.render import segment_span
+
+needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+
+
+def jpeg_frames(n: int) -> list[bytes]:
+    out = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=10",
+                          "-frames:v", str(n), "-c:v", "mjpeg", "-f", "image2pipe", "-"],
+                         check=True, capture_output=True).stdout
+    frames, start = [], 0
+    while (end := out.find(b"\xff\xd9", start)) != -1:  # JPEG end-of-image marker
+        frames.append(out[start:end + 2])
+        start = end + 2
+    return frames
+
+
+def mjpeg_server(frames: list[bytes]) -> ThreadingHTTPServer:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # like Bambuddy: multipart/x-mixed-replace; boundary=frame, ~10 fps
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.end_headers()
+            try:
+                for f in frames:
+                    self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n"
+                                     b"Content-Length: %d\r\n\r\n" % len(f) + f + b"\r\n")
+                    self.wfile.flush()
+                    time.sleep(0.1)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def log_message(self, *a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+@needs_ffmpeg
+def test_real_ffmpeg_records_mjpeg_stream_with_unix_timestamps(tmp_path):
+    srv = mjpeg_server(jpeg_frames(40))
+    try:
+        rec = Recorder(f"http://127.0.0.1:{srv.server_port}/stream", tmp_path)
+        before = time.time()
+        rec.ensure(27)
+        time.sleep(3)
+        rec.stop()
+    finally:
+        srv.shutdown()
+    segments = sorted((tmp_path / "archive_27").glob("*.mkv"))
+    assert len(segments) == 1
+    # The segment is named in UTC (-strftime with TZ=UTC) ...
+    named = time.mktime(time.strptime(segments[0].stem, "%Y%m%dT%H%M%SZ")) - time.timezone
+    assert abs(named - before) < 5
+    # ... and -use_wallclock_as_timestamps + -copyts make its pts Unix arrival times.
+    t0, t1 = segment_span(segments[0])
+    assert abs(t0 - before) < 5
+    assert 1 < t1 - t0 < 5

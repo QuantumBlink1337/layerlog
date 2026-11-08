@@ -2,7 +2,8 @@
 
 Logs Bambu P2S prints to Notion with slicer settings, and keeps a telemetry timeline
 per print so a failure can be traced to its layer and moment. Everything is pulled from
-Bambuddy's API; nothing needs to reach layerlog.
+Bambuddy's API; nothing needs to reach layerlog. See `HANDOFF.md` for current state,
+decisions and next steps.
 
 Layout:
 - `layerlog.bambuddy`, `layerlog.names`: shared Bambuddy client (archives, printer status) and name helpers
@@ -19,27 +20,50 @@ Needs `ffmpeg` on the PATH (without it, only telemetry is kept).
 BAMBUDDY_URL=http://192.168.0.39:8000 .venv/bin/python -m layerlog.surveillance
 ```
 
-Or on nucleus:
+Or on nucleus (Unraid), with telemetry on the cache and footage on the array:
 
 ```bash
-docker build -t layerlog .
-docker run -d --name layerlog-surveillance -v /mnt/user/appdata/layerlog:/data \
-  -e BAMBUDDY_URL=http://192.168.0.39:8000 -e TZ=America/Chicago layerlog
+docker build --target test .        # runs the test suite against the image's ffmpeg
+mkdir -p /mnt/user/appdata/layerlog /mnt/user/layerlog/recordings /mnt/user/layerlog/renders
+chown -R 99:100 /mnt/user/appdata/layerlog /mnt/user/layerlog
+docker compose up -d --build        # see compose.yaml
 ```
+
+| Container path | Host path | Holds |
+|---|---|---|
+| `/data` | `/mnt/user/appdata/layerlog` (cache) | `telemetry/archive_<id>.jsonl` |
+| `/recordings` | `/mnt/user/layerlog/recordings` (array) | raw segments, until the final render |
+| `/renders` | `/mnt/user/layerlog/renders` (array) | rendered MP4s, kept |
+
+Give the `layerlog` share Array as its primary storage, or raw footage goes to the cache
+first. There's also an Unraid template, `unraid/layerlog-surveillance.xml`, if you'd
+rather use the Docker tab than compose. On startup, raw recordings of prints that ended
+while the container was down get their final render. That only happens once Bambuddy no
+longer reports the archive as `printing`.
 
 While a print runs, the camera stream is copied (no re-encode, about 3.7 GB/hour at the
 P2S's 1080p ~10 fps) into `RECORDINGS_DIR/archive_<id>/` as hourly segments, and each poll
 is appended to `TELEMETRY_DIR/archive_<id>.jsonl`. Set `BAMBUDDY_API_KEY` if Bambuddy auth
 is on, `POLL_SECONDS` (default 2) to change the rate, and `RECORD=0` to skip video.
 
-## Render a print with its overlay
+## Rendered video
+
+`RENDERS_DIR/archive_<id>.mp4` (default `./renders`) has the local clock (`TZ`) and the
+layer, progress, temperature and fan readings burned in, re-encoded to H.264 (about
+0.5 GB/hour). The poller renders it automatically:
+
+- every `RENDER_EVERY_SECONDS` (default 3600) while the print runs; finished hourly
+  segments are reused, so each refresh only encodes the current hour
+- as soon as the print pauses (manual pause, or the printer's error detection pausing it)
+- when the print ends (after it has looked ended for 30 s); on success the raw recording
+  is **deleted**
+
+The file is replaced atomically, so a copy open in a player is never half-written. To
+render by hand (raw footage is kept unless you pass `final=True` from Python):
 
 ```bash
-.venv/bin/python -m layerlog.surveillance.render 27   # -> renders/archive_27.mp4
+.venv/bin/python -m layerlog.surveillance.render 27
 ```
-
-Burns in the local clock (`TZ`) and the layer, progress, temperature and fan readings,
-re-encoded to H.264 (about 0.5 GB/hour).
 
 ## Develop
 

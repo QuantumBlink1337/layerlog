@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<!-- Unraid template. Copy to /boot/config/plugins/dockerMan/templates-user/my-layerlog-surveillance.xml,
+     then Docker > Add Container > Template: layerlog-surveillance.
+     The image is built locally (docker build -t layerlog .), so Unraid's update check won't find it;
+     rebuild to update. Use this or compose.yaml, not both. -->
+<Container version="2">
+  <Name>layerlog-surveillance</Name>
+  <Repository>layerlog</Repository>
+  <Network>bridge</Network>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Overview>Records the Bambu P2S camera via Bambuddy with telemetry burned into the video.</Overview>
+  <Category>Tools:</Category>
+  <ExtraParams>--user 99:100 --stop-timeout 30 --restart unless-stopped --log-opt max-size=10m --log-opt max-file=3</ExtraParams>
+  <Config Name="Telemetry (cache)" Target="/data" Default="/mnt/user/appdata/layerlog" Mode="rw" Description="Telemetry JSONL; keep on the cache." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/layerlog</Config>
+  <Config Name="Raw recordings (array)" Target="/recordings" Default="/mnt/user/layerlog/recordings" Mode="rw" Description="Raw MJPEG segments, ~3.7 GB/hour, deleted after the final render." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/layerlog/recordings</Config>
+  <Config Name="Renders (array)" Target="/renders" Default="/mnt/user/layerlog/renders" Mode="rw" Description="Rendered MP4s with overlay, kept." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/layerlog/renders</Config>
+  <Config Name="BAMBUDDY_URL" Target="BAMBUDDY_URL" Default="http://192.168.0.39:8000" Mode="" Description="Bambuddy base URL." Type="Variable" Display="always" Required="true" Mask="false">http://192.168.0.39:8000</Config>
+  <Config Name="TZ" Target="TZ" Default="America/Chicago" Mode="" Description="Time zone of the clock overlay." Type="Variable" Display="always" Required="true" Mask="false">America/Chicago</Config>
+  <Config Name="PRINTER_ID" Target="PRINTER_ID" Default="1" Mode="" Description="Bambuddy printer id." Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+  <Config Name="RENDER_EVERY_SECONDS" Target="RENDER_EVERY_SECONDS" Default="3600" Mode="" Description="Refresh the render this often while printing." Type="Variable" Display="advanced" Required="false" Mask="false">3600</Config>
+  <Config Name="BAMBUDDY_API_KEY" Target="BAMBUDDY_API_KEY" Default="" Mode="" Description="Only if Bambuddy auth is on." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+</Container>

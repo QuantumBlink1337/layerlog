@@ -1,8 +1,10 @@
 .venv
 .git
+.env
 telemetry
-__pycache__
-.pytest_cache
-tests
 recordings
 renders
+surveillance.log
+__pycache__
+.pytest_cache
+*.egg-info
