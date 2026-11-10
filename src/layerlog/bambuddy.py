@@ -109,6 +109,33 @@ class HmsError:
     job_id: str | None
 
 
+NO_TRAY = 255  # tray_now when nothing is loaded
+EXTERNAL_TRAY = 254  # the external spool holder (vt_tray)
+
+
+def active_tray(d: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None, dict[str, Any] | None]:
+    """The slot feeding now, from ``tray_now``: (label, tray, AMS unit or None).
+
+    Bambu numbers trays globally: AMS ``n`` slot ``s`` is ``n*4 + s`` (shown as
+    "A1".."D4"), a single-slot AMS HT is its own unit id (128+), 254 is the
+    external spool and 255 is nothing loaded.
+    """
+    n = d.get("tray_now")
+    if not isinstance(n, int) or n == NO_TRAY:
+        return None, None, None
+    if n == EXTERNAL_TRAY:
+        vt = d.get("vt_tray") or []
+        return "Ext", (vt[0] if vt else None), None
+    units = {u.get("id"): u for u in d.get("ams") or []}
+    if n >= 128:
+        unit, slot, label = units.get(n), 0, f"HT{n - 127}"
+    else:
+        unit, slot = units.get(n // 4), n % 4
+        label = f"{'ABCD'[n // 4]}{slot + 1}" if n < 16 else None
+    trays = {t.get("id"): t for t in (unit or {}).get("tray") or []}
+    return label, trays.get(slot), unit
+
+
 @dataclass
 class PrinterStatus:
     """One poll of ``/printers/{id}/status``, reduced to what we log."""
@@ -132,12 +159,26 @@ class PrinterStatus:
     fan_part: int | None  # cooling_fan_speed, percent
     fan_aux: int | None  # big_fan1_speed, Bambu's aux fan
     fan_chamber: int | None  # big_fan2_speed, Bambu's chamber fan
+    printer_name: str | None
+    nozzle_diameter: float | None  # mm, first nozzle
+    nozzle_type: str | None  # e.g. "HS00"
+    tray: str | None  # slot feeding now: "A2" (AMS 1, slot 2), "HT1", "Ext"; None when unloaded
+    filament_type: str | None  # that slot's filament, e.g. "PLA"
+    filament_color: str | None  # that slot's colour as RRGGBB
+    ams_humidity: int | None  # percent, of the AMS unit feeding now
     hms_errors: list[HmsError]
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> PrinterStatus:
         t = d.get("temperatures") or {}
+        nozzle = (d.get("nozzles") or [{}])[0] or {}
+        try:
+            nozzle_diameter = float(nozzle.get("nozzle_diameter") or "") or None
+        except ValueError:
+            nozzle_diameter = None
+        tray_label, tray, unit = active_tray(d)
+        tray = tray or {}
         return cls(
             id=d["id"],
             connected=bool(d.get("connected")),
@@ -158,6 +199,13 @@ class PrinterStatus:
             fan_part=d.get("cooling_fan_speed"),
             fan_aux=d.get("big_fan1_speed"),
             fan_chamber=d.get("big_fan2_speed"),
+            printer_name=d.get("name"),
+            nozzle_diameter=nozzle_diameter,
+            nozzle_type=(nozzle.get("nozzle_type") or None),
+            tray=tray_label,
+            filament_type=tray.get("tray_type") or None,
+            filament_color=(tray.get("tray_color") or "")[:6].upper() or None,
+            ams_humidity=unit.get("humidity") if unit else None,
             hms_errors=[HmsError(full_code=e.get("full_code") or "", severity=e.get("severity"),
                                  description=e.get("description"), job_id=e.get("job_id"))
                         for e in d.get("hms_errors") or []],

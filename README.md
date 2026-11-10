@@ -48,7 +48,8 @@ is on, `POLL_SECONDS` (default 2) to change the rate, and `RECORD=0` to skip vid
 
 ## Rendered video
 
-`RENDERS_DIR/archive_<id>.mp4` (default `./renders`) has the local clock (`TZ`) and the
+`RENDERS_DIR/<date> <print name> #<id>.mp4` (default `./renders`), for example
+`2026-11-09 Beeba-baseline-support_PLA #28.mp4`, has the local clock (`TZ`) and the
 layer, progress, temperature and fan readings burned in, re-encoded to H.264 (about
 0.5 GB/hour). The poller renders it automatically:
 
@@ -58,11 +59,22 @@ layer, progress, temperature and fan readings burned in, re-encoded to H.264 (ab
 - when the print ends (after it has looked ended for 30 s); on success the raw recording
   is **deleted**
 
-The file is replaced atomically, so a copy open in a player is never half-written. To
-render by hand (raw footage is kept unless you pass `final=True` from Python):
+The top right shows the printer, print and plate, nozzle, and the AMS slot feeding now
+(filament type, a colour swatch, AMS humidity). The file has a chapter per layer
+(`Layer 553 / 1415`), with the preparation stages, pauses and filament changes named;
+VLC, mpv, IINA, QuickTime and Plex show them, Immich and browsers don't.
+
+The file is replaced atomically, so a copy open in a player is never half-written. The
+renders folder only ever holds finished videos (per-segment parts sit in the raw recording
+folder; a video being written is a hidden `.partial` file), so it can be a folder Immich
+watches. Raw footage and telemetry stay numbered by archive id.
+
+To render by hand (raw footage is kept unless you pass `final=True` from Python), or to
+rename renders made before print names to the new form:
 
 ```bash
 .venv/bin/python -m layerlog.surveillance.render 27
+.venv/bin/python -m layerlog.surveillance.render --rename 27 28
 ```
 
 ## Develop

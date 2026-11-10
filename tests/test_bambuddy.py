@@ -122,9 +122,39 @@ def test_printer_status_from_real_poll():
     assert [e.full_code for e in s.hms_errors] == ["0501040000030002"]
 
 
+def test_printer_status_print_details_from_real_poll():
+    s = PrinterStatus.from_json(STATUS)
+    assert s.printer_name == "Matt's P2S"
+    assert (s.nozzle_diameter, s.nozzle_type) == (0.2, "HS00")
+    assert (s.tray, s.filament_type, s.filament_color) == ("A2", "PLA", "6B6E6E")
+    assert s.ams_humidity == 19
+
+
+AMS = [{"id": 0, "humidity": 12, "tray": [{"id": i, "tray_type": "PLA", "tray_color": "FFFFFFFF"} for i in range(4)]},
+       {"id": 1, "humidity": 30, "tray": [{"id": i, "tray_type": "PETG", "tray_color": "00FF00FF"} for i in range(4)]},
+       {"id": 128, "humidity": 5, "tray": [{"id": 0, "tray_type": "TPU", "tray_color": "112233FF"}]}]
+
+
+@pytest.mark.parametrize("tray_now, expected", [
+    (6, ("B3", "PETG", "00FF00", 30)),
+    (128, ("HT1", "TPU", "112233", 5)),
+    (254, ("Ext", "ABS", "ABCDEF", None)),
+    (255, (None, None, None, None)),
+    (None, (None, None, None, None)),
+])
+def test_active_tray(tray_now, expected):
+    s = PrinterStatus.from_json({"id": 1, "state": "RUNNING", "tray_now": tray_now, "ams": AMS,
+                                 "vt_tray": [{"id": 254, "tray_type": "ABS", "tray_color": "abcdefff"}]})
+    assert (s.tray, s.filament_type, s.filament_color, s.ams_humidity) == expected
+
+
 def test_printer_status_tolerates_idle_printer():
     s = PrinterStatus.from_json({"id": 1, "connected": False, "state": "IDLE"})
     assert s.archive_id is None and s.layer is None and s.nozzle_temp is None and s.hms_errors == []
+    assert s.printer_name is None and s.nozzle_diameter is None and s.tray is None
+
+    s = PrinterStatus.from_json({"id": 1, "state": "IDLE", "nozzles": [{"nozzle_type": "", "nozzle_diameter": ""}]})
+    assert s.nozzle_diameter is None and s.nozzle_type is None
 
 
 def test_printer_status_hits_endpoint_and_404_is_printer_not_found():

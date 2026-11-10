@@ -27,6 +27,8 @@ def test_poll_is_written_to_its_archive_file_without_raw(tmp_path):
     assert rec["ts"] == "2026-11-08T21:00:00+00:00"
     assert rec["layer"] == 553 and rec["state"] == "RUNNING" and rec["archive_id"] == 27
     assert rec["hms_errors"][0]["full_code"] == "0501040000030002"
+    assert (rec["tray"], rec["filament_type"], rec["ams_humidity"]) == ("A2", "PLA", 19)
+    assert rec["printer_name"] == "Matt's P2S" and rec["nozzle_diameter"] == 0.2
     assert "raw" not in rec
 
 
