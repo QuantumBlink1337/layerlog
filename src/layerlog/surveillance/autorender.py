@@ -16,6 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..bambuddy import BambuddyClient, BambuddyError, PrinterStatus
+from .render import EmptySegment
 from .telemetry import is_active
 
 log = logging.getLogger("layerlog.surveillance")
@@ -53,7 +54,9 @@ class RenderScheduler:
             if status.archive_id != self._archive_id:
                 if self._archive_id is not None:
                     self._fire(self._archive_id, "print ended", True)
-                self._archive_id, self._paused, self._last = status.archive_id, False, self._clock()
+                # A print first seen paused has nothing recorded yet, so that pause doesn't render.
+                self._archive_id, self._last = status.archive_id, self._clock()
+                self._paused = is_paused(status)
             paused = is_paused(status)
             if paused and not self._paused:
                 self._fire(status.archive_id, f"paused ({status.stage or status.state})")
@@ -103,6 +106,8 @@ class RenderWorker:
             log.info("rendering archive %s (%s)", archive_id, reason)
             try:
                 log.info("rendered %s", self._render(archive_id, final))
+            except EmptySegment as e:
+                log.info("nothing to render for archive %s yet: %s", archive_id, e)
             except Exception:
                 log.exception("render of archive %s failed", archive_id)
             finally:

@@ -343,7 +343,7 @@ def render(archive_id: int, telemetry_dir: Path, recordings_dir: Path, out_dir: 
     raw_dir = recordings_dir / f"archive_{archive_id}"
     segments = sorted(raw_dir.glob("*.mkv"))
     if not segments:
-        raise FileNotFoundError(f"no recordings for archive {archive_id}")
+        raise EmptySegment(f"no recordings for archive {archive_id}")
     parts_dir = raw_dir / "parts"  # not *.mkv, so never taken for a segment
     parts_dir.mkdir(parents=True, exist_ok=True)
     parts = []

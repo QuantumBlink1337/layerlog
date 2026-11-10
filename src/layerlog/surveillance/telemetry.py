@@ -41,6 +41,7 @@ class TelemetryLog:
     def __init__(self, directory: Path | str):
         self.dir = Path(directory)
         self._last_state: str | None = None
+        self._open: int | None = None  # the print being logged, until its end line is written
 
     def path_for(self, archive_id: int) -> Path:
         return self.dir / f"archive_{archive_id}.jsonl"
@@ -49,10 +50,19 @@ class TelemetryLog:
         """Append ``status`` if it belongs in a timeline; return the file written, if any."""
         changed = status.state != self._last_state
         self._last_state = status.state
-        if status.archive_id is None or (status.state in PARKED_STATES and not changed):
-            return None
+        if status.state in PARKED_STATES:
+            # A cancelled or failed print reports FAILED with current_archive_id already
+            # cleared, so the end line goes to the print that was being logged.
+            archive_id, self._open = status.archive_id or self._open, None
+            if archive_id is None or not changed:
+                return None
+        else:
+            archive_id = status.archive_id
+            if archive_id is None:
+                return None
+            self._open = archive_id
         self.dir.mkdir(parents=True, exist_ok=True)
-        path = self.path_for(status.archive_id)
+        path = self.path_for(archive_id)
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record(status, at), ensure_ascii=False) + "\n")
         return path

@@ -41,6 +41,16 @@ def test_parked_printer_logs_the_transition_once(tmp_path):
     assert [r["state"] for r in lines(tmp_path / "archive_27.jsonl")] == ["RUNNING", "RUNNING", "FINISH"]
 
 
+def test_cancelled_print_end_line_goes_to_the_print_that_was_logged(tmp_path):
+    # Seen on archive 29: a cancel reports FAILED with current_archive_id already cleared.
+    tlog = TelemetryLog(tmp_path)
+    tlog.observe(status(state="PAUSE"), T0)
+    assert tlog.observe(status(state="FAILED", current_archive_id=None), T0 + timedelta(seconds=2)) is not None
+    assert tlog.observe(status(state="FAILED", current_archive_id=None), T0 + timedelta(seconds=4)) is None
+    assert tlog.observe(status(state="IDLE", current_archive_id=None), T0 + timedelta(seconds=6)) is None
+    assert [r["state"] for r in lines(tmp_path / "archive_27.jsonl")] == ["PAUSE", "FAILED"]
+
+
 def test_unknown_states_are_logged_and_no_archive_is_skipped(tmp_path):
     tlog = TelemetryLog(tmp_path)
     assert tlog.observe(status(state="PAUSE"), T0) is not None

@@ -45,6 +45,26 @@ def test_pause_renders_once_per_pause_by_state_or_stage():
                      (27, "paused (Pause due to spaghetti detected)", False)]
 
 
+def test_print_first_seen_paused_does_not_render_until_its_next_pause():
+    sched, fired, t = make()
+    sched.observe(status(state="PAUSE"))  # archive 29 started paused: nothing recorded yet
+    sched.observe(status())
+    sched.observe(status(state="PAUSE"))
+    assert [r for _, r, _ in fired] == ["paused (Printing)"]
+
+
+def test_worker_logs_nothing_to_render_quietly(caplog):
+    from layerlog.surveillance.render import EmptySegment
+
+    def render(archive_id, final):
+        raise EmptySegment("no recordings for archive 29")
+
+    worker = RenderWorker(render)
+    worker.request(29, "paused")
+    wait_idle(worker)
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+
 def test_pause_resets_hourly_clock():
     sched, fired, t = make()
     sched.observe(status())
